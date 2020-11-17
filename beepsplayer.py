@@ -48,14 +48,6 @@ class Player:
         if note == 'q':
             self._freqs.append(0)
             return
-
-        if note == 'x':
-            #placeholder 0 for now
-            #need to account for string it's on
-            #can't be treated as a simple freq
-            #(same will be true for harmonics)
-            self._freqs.append(0)
-            return
 		
         letter = note[:1].upper()
         try:
@@ -97,6 +89,10 @@ class Player:
                                     file=sys.stderr)
 
     def __calc_frequency(self, note: str):
+		if note == 'x':
+			self._freqs.append('x')
+			return
+			
         self.__set_base_frequency(note)
         if len(note) == 1:
             self.__set_octave()
@@ -124,9 +120,15 @@ class Player:
     def __gen_waveseg(self, freq: float, harm: bool, stime: float, etime: float):
         dur = etime - stime
         t = np.linspace(stime, etime, int(dur * self.rate), False)
-        wave = np.sin(freq * t * 2 * np.pi)
-        if not harm:
-            wave += sum([np.sin(mul * freq * t * 2 * np.pi)/2**(mul-1) for mul in range(2,6)])
+        if harm:
+            #no overtones
+            wave = np.sin(freq * t * 2 * np.pi)
+        else:
+			#overtones
+            wave = sum([np.sin(mul * freq * t * 2 * np.pi)/4**(mul-1) for mul in range(1,6)])
+            #no overtones
+            #wave = np.sin(freq * t * 2 * np.pi)
+        #'''
         self._wavesegs.append(wave)	
         
     def __gen_bend(self, f0: float, f1: float, stime: float, etime: float):
@@ -137,6 +139,8 @@ class Player:
 		
     def __overlay(self): #this doesn't need to be its own fcn
 		#overlays over time interval
+        sl = min([len(w) for w in self._comp])
+        self._comp = [w[:sl] for w in self._comp]
         self._audio = sum(self._comp)
             
     def __gen_waveform(self, dur: float):
@@ -144,6 +148,11 @@ class Player:
 		#for first and last note: extra half-len segm. at ends
 		#(this sounds bad for bend/slide)
 		#right now isn't doing all slides correctly, assumes all are 'to'
+		#handle x separately
+		
+		if self._freqs == ['x']:
+			
+		
         unitl = dur/4
         nnotes = len(self._freqs)
         tot = 2 * unitl * nnotes
@@ -166,7 +175,7 @@ class Player:
                 
             elif mode in ['\\','/','s']:
                 fund = (2 ** (1. / 12.))
-                steps = int(math.log(f1/f0,fund))
+                steps = int(round(math.log(f1/f0,fund)))
                 ud = -(-1)**(steps>0)
                 steps *= ud
                 self.__gen_waveseg(f0,h0,(2*i+1)*unitl,(2*i+1.2)*unitl)
@@ -179,7 +188,7 @@ class Player:
             f0, h0 = f1, h1   
 					
         self.__gen_waveseg(f1,h1,tot-unitl,tot)
-
+       
         self._comp.append(np.concatenate(self._wavesegs))
 	
         '''
@@ -255,7 +264,7 @@ class Player:
         self._wavesegs = []
 
     def play_note(self, notes: [[str]], dur: float = 0.5):
-        print(notes) #DISPLAY
+        #print(notes) #DISPLAY
         self.__param_reset()
         self._comp = []
         self._audio = None
@@ -270,11 +279,13 @@ class Player:
             for unit in notes:
                 for sym in unit:
                     if sym[0][0] in ['A','B','C','D','E','F','G','x','q']:
+						#for x, try "white noise" but only at low freq
                         self.__calc_frequency(sym[0])
-                        self._harm.append(True)#sym[1])
+                        self._harm.append(sym[1])
                     else:
                         self._joinmodes.append(sym)
-                if self._valid_note:               
+                if self._valid_note:
+                    self._destructor_sleep = dur*len(self._freqs)/2             
                     self.__gen_waveform(dur)
                     self.__param_reset()
                     
@@ -282,7 +293,6 @@ class Player:
                 self.__overlay()
                 self.__write_stream()
                 #self.__print_played_notes(notes, dur, mode)
-                self._destructor_sleep = dur #adjust this
 
     def __del__(self):
         time.sleep(self._destructor_sleep)
