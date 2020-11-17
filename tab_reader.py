@@ -1,6 +1,7 @@
 import musicalbeeps
 import re
 import math
+import threading
 #import time
 
 '''
@@ -14,19 +15,27 @@ Intractable issues:
 
 
 tones = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+#convert flat notes to equivalent sharp or natural. Unnecessary?
+unflat = {'Bb': 'A#', 'Db': 'C#', 'Eb': 'D#', 'Fb': 'E', 'Gb': 'F#', 'Ab': 'G#'}
+#give harmonic overtone multiplier (approximate)
+harmonics = {0: 0, 1: 16, 2: 9, 3: 6, 4: 5, 5: 4, 6: 7, 7: 3, 8: 8, 9: 5, 10: 9, 11: 15, 12: 2,
+             13: 32, 14: 9, 15: 12, 16: 5, 17: 8, 18: 14, 19: 3, 20: 16, 21: 10, 22: 18, 23: 15, 24: 4}
 #freqs = [130.81, 138.59, 146.83, 155.56, 164.81, 174.61, 185, 196, 207.65, 220, 233.08, 246.94] #This is 3rd octave
-unflat = {'Bb': 'A#', 'Db': 'C#', 'Eb': 'D#', 'Fb': 'E', 'Gb': 'F#', 'Ab': 'G#'}#converts flat notes to equivalent sharp or natural
+
+
 #freqs = [2*f for f in freqs] #for better winsound
 #fdict = dict(zip(tones,freqs))
 
 #h = hammer-on. Join two notes into half-dur waves spliced midway.
 #p = pull-off. Same as h but second half has slight volume increase?
-#\ or / = slide. Similar to above but goes over all in-between tones.
-#b = bend. Always up, up to a full tone. Here do continuous (instead of discrete) frequency transition.
+#\, /, s = slide. Similar to above but goes over all in-between tones.
+#b,^ = bend. Always up, up to a full tone. Here do continuous (instead of discrete) frequency transition.
 #r = release bend.
-#v or ~ = vibrato. Rapid bend/release.
+#v, ~ = vibrato. Rapid bend/release.
+#= = extend. Hold note.
+#*, +, <> = harmonic. Pure tone, according to dict.
 #x = dead note. Soften/dampen volume?
-#() = ghost note. Play softer.
+#() = ghost note. Play softer?
 
 #currently I'm not using this list directly
 symb = ['h','p','b','r','s','v','x','^','~','\\','/','(',')','[',']','<','>','*','+','=','-']
@@ -62,14 +71,15 @@ def clean(tabfile,printout=False):
 	#slideflag = False #for handling slides
 	#hpflag = False #for handling hammer-ons/pull-offs
 	slflag = False
+	newbarfl = True
 	init = True
 
 	with open('Tabs\\'+tabfile+'.txt', 'r') as f:
 		
 		for line in f:
 			
-			noteunit = ''
-			stexp = 0
+			noteunit = pnu = ''
+			stexp = pse = 0
 			
 			#this should mean we've reached the end legend
 			if line[0] in ['*', '-', '=']: 
@@ -77,8 +87,13 @@ def clean(tabfile,printout=False):
 			
 			#no longer the first bar, move to next bar
 			#skip over any intermediary instructions
-			if line[0] in ['\n', ' ', '[', '(', '|']: 
+			if line[0] in ['\n', ' ', '[', '(', '|']:
+				if not newbarfl:
+					for i in range(6):
+						nidxs[i] -= 3 
+					newbarfl = True
 				continue
+			newbarfl = False
 			
 			if tunings[-1]:
 				init = False
@@ -116,12 +131,15 @@ def clean(tabfile,printout=False):
 					noteunit += ch
 						
 				else: #ch == '-'
+					#handle spaced slide (iron man)
 					if noteunit in ['\\','/']:
-						stexp, _, __, no = strings[sidx].pop()
-						noteunit = str(no[0])+noteunit
+						strings[sidx].pop()
+						noteunit, stexp = pnu, pse
+						slflag = True
 					#do something similar for release after (invisibly) held bend?
 					#see heart shaped box for example
 					elif noteunit:
+						pnu, pse = noteunit, stexp
 						fm = [stexp,nidxs[sidx],peeler(noteunit)]
 						strings[sidx].append(fm)
 						noteunit = ''
@@ -249,7 +267,8 @@ def peeler(noteunit):
 	
 	#new version: list of interspersed frets and/or connectors
 	#pushing most of the real work off to MB side
-	#change: track harmonics by appending bool to note (here, fret #)
+	#change: track harmonics by bumping up fret #
+	#(keep bools for now too so as to also incorp. overtones)
 	#also right now I'm just putting in slashes and not tracking phantom
 	#add support for ~, =
 	
@@ -257,7 +276,7 @@ def peeler(noteunit):
 	sl = 0
 	be = 0
 	rel = 0
-	pfret = None
+	fret = pfret = None
 	harm = False
 	
 	for f in symb:
@@ -271,17 +290,22 @@ def peeler(noteunit):
 			if be:
 				if len(playarr) == 1:
 					playarr = [[fret-1,False], 'b']
-					harr.append(False)
 				be = 0
 			if rel:
 				if len(playarr) == 1:
 					playarr = [[fret+1,False], 'r']
 				rel = 0
 			
-			playarr.append([fret,harm])
+			if harm:
+				playarr.append([(harmonics[fret]-1)*12,True])
+			else:
+				playarr.append([fret,False])
 				
 		elif f:
-			if f in ['h','p','x']:
+			if f == 'x':
+				#temporary
+				playarr.append([60,False])
+			elif f in ['h','p']:
 				playarr.append(f)
 			elif f in ['<','[']:
 				harm = True
@@ -306,7 +330,7 @@ def peeler(noteunit):
 						playarr.extend(['r',[pfret,False]])
 					playarr.append(f)
 				else:
-					rel = 1
+					rel = -1
 				playarr.append(f)
 
 			
@@ -314,6 +338,8 @@ def peeler(noteunit):
 		playarr.append([fret + sl*3,False])
 	if be:
 		playarr.append([fret + be,False])
+	if rel:
+		playarr.append([fret + rel, False])
 	
 	return playarr
 	
@@ -393,6 +419,8 @@ def playtab(tabfile,note_len=.5):
 	-- Longer tapping chains
 
 	-- Better sound system (actual guitar tones)
+	
+	-- parallel threads: one for each string!
 	'''
 	
 	note_times = clean(tabfile)
@@ -447,9 +475,9 @@ def playtab(tabfile,note_len=.5):
 		#if ts - pte > 2:
 		#	player.play_note([['q']],.1)
 		
-		pa = (ts - pte)//pause_sp - 1
-		if pa > 0:
-			player.play_note([['q']],note_len*pa)
+		pa = (ts - pte)/pause_sp - 1
+		if pa > 1:
+			player.play_note([['q']],note_len*pa/2)
 		
 		pte = te
 		#if pause > 0:
@@ -466,25 +494,35 @@ def playtab(tabfile,note_len=.5):
 def sample(i,notelen):	
 	tabfiles = ['basic_scale_c_minor', 'twinkle_star', 'sweet_child_o_mine_intro', 
 	            'livin_on_a_prayer_intro', 'more_than_a_feeling_intro', 'chopsticks', 
-	            'blackbird', 'iron_man', 'snow_hey_oh', 'monkey_wrench', 
+	            'blackbird', 'iron_man', 'snow_hey_oh', 'yellow_ledbetter', 
 	            'heart_shaped_box', 'house_of_the_rising_sun', 'plug_in_baby',
 	            'hysteria', 'whole_lotta_love', 'scar_tissue', 'paint_it_black',
 	            'dont_fear_the_reaper', 'thunderstruck', 'smoke_on_the_water',
 	            'raining_blood', 'jessica', 'cowboys_from_hell', 'hangar_18', 'chop_suey',
 	            'you_really_got_me', 'the_trooper', 'comfortably_numb_solos',
-	            'nothing_else_matters', 'red_barchetta', 'roundabout']
+	            'nothing_else_matters', 'red_barchetta', 'roundabout', 'fur_elise']
 			
 	playtab(tabfiles[i],notelen)
 	
 #issues tracker
 #for everything, issue with chord slide arrays being incompat due to dimn off by 1 (only for certain notelen)
+#(this happens with slides/bends due to rounding from splitting/squaring?)
 #iron man has a hammer onto nothing '9h'
 #heart shaped box & hysteria has held bend into release (sep by -)
 #plug in baby didn't play final bend-rel
 #whole lotta love has bend from nothing
 #thunderstruck doesn't process init. riff at all
-	
-sample(6,.333)
+#often tripped up by "o"s to indicate repeated bars
 
-#player = musicalbeeps.Player(volume = 0.8, mute_output = False)
-#player.play_note([[['A3', '/', 'D4'], [True,True]]],1)
+#2Do finish:
+#finish harmonics, calc. and implement muted
+#repair all outstanding issues in all songs above
+
+
+'''
+player = musicalbeeps.Player(volume = 0.9, mute_output = False)
+player.play_note([[['A3',False],'n',['A3',False]]],1)
+'''
+
+
+sample(23,.1)
